@@ -27,7 +27,11 @@ from .transform import change_transform_origin, transform_aabb
 
 def read_image_bgr(path):
     image = np.asarray(Image.open(path).convert('RGB'))
-    return image[:, :, ::-1].copy()
+    if(len(image)==0):
+        print("image not found!,path is ",path)
+        return None
+    else:
+        return image[:, :, ::-1].copy()
 
 
 def preprocess_image(x):

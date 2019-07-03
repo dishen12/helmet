@@ -25,9 +25,6 @@ import os
 import cv2
 import pickle
 import numpy as np
-import tensorflow as tf
-import requests,json
-
 
 def split_image(image,target_size,draw_split=False):
     """
@@ -242,6 +239,7 @@ def upload(video_path):
         "fileUrl":"group1/M00/00/00/CjLIa10V-92AUONHAAAACV_xtOE8838105",
         "success":true}
         """
+        import requests,json
         url='http://222.173.73.19:8762/mtrp/file/json/upload.jhtml'
         with open(video_path,'rb') as file:
             files = {'upload': file}
@@ -282,26 +280,13 @@ class Stack:
     def push(self, item):
         self.items.append(item)      
     
-def capture_thread(video_path, frame_buffer, lock):
-    print("capture_thread start")
-    vid = cv2.VideoCapture(video_path)
-    if not vid.isOpened():
-        print('video_path: ' + video_path)
-        raise IOError("Couldn't open webcam or video")
-    while True:
-        return_value, frame = vid.read()
-        if return_value is False:
-            break
-        lock.acquire()
-        frame_buffer.push(frame)
-        #print("push one")
-        lock.release()
-        cv2.waitKey(1)
 
+        
 def _get_detections_video(generator,videoPath, model, score_threshold=0.05, max_detections=100, save_path=None):
     import cv2 
     import datetime
-    import threading
+    cap=cv2.VideoCapture(videoPath)
+    i = 0
 
     """
     connect the mysql
@@ -319,131 +304,95 @@ def _get_detections_video(generator,videoPath, model, score_threshold=0.05, max_
     pre_alarm = None
     pre_c_f = 0 
     pre_c_p = 0
-    
-    #cap=cv2.VideoCapture(videoPath)
-    frame_buffer = Stack(1)
-    lock = threading.RLock()
-    t1 = threading.Thread(target=capture_thread, args=(videoPath, frame_buffer, lock))
-    t1.start()
-    i = 0
     while(True):
-        #print("the size of buffer is :",frame_buffer.size())
-        if (frame_buffer.size() > 0):
+        ret,frame = cap.read()
+        if(ret==False):
+            print("video is interrupted!")
+            break
+        h,w,_ = frame.shape
+        i += 1
+        cut_video_id +=1
+        print("frame id:",i)
+        raw_image    = frame.copy()
+        image        = generator.preprocess_image(raw_image.copy())
+        image, scale = generator.resize_image(image)
+        
+        c_p = 0
+        c_f = 0
+        
+        # run network
+        boxes, scores, labels = model.predict_on_batch(np.expand_dims(image, axis=0))
+
+        # correct boxes for image scale
+        boxes /= scale
+
+        # select indices which have a score above the threshold
+        indices = np.where(scores[0, :] > score_threshold)[0]
+
+        # select those scores
+        scores = scores[0][indices]
+
+        # find the order with which to sort the scores
+        scores_sort = np.argsort(-scores)[:max_detections]
+
+        # select detections
+        image_boxes      = boxes[0, indices[scores_sort], :]
+        image_scores     = scores[scores_sort]
+        image_labels     = labels[0, indices[scores_sort]]
+        image_detections = np.concatenate([image_boxes, np.expand_dims(image_scores, axis=1), np.expand_dims(image_labels, axis=1)], axis=1)
+        #print(image_boxes)
+        
+        selection = np.where(image_scores > score_threshold)[0]
+        for s in selection:
+            if(image_labels[s] in (0,1,2,3)):
+                c_p += 1
+            else:
+                c_f += 1
+        if(i%100==0 and c_f>0):
+            #截取视频
+            if(videoWriter is not None):
+                videoWriter.release()
+            alarmTime = datetime.datetime.strftime(datetime.datetime.now(),'%Y-%m-%d %H:%M:%S')
+            if(video_path is not None):
+                fileUrl = upload(video_path)
+                #插入数据库
+                if(pre_alarm is None): 
+                    print("errot")
+                    return 
+                event_id = str(i)
+                content = "现场监测到{}个工人，有{}个工人未带安全帽".format(pre_c_p+pre_c_f,pre_c_f)
+                device_id = "46"
+                ip = "222.173.73.19:8761"
+                sql_query = "insert into mtrp_alarm_test(event_id,alarmTime,content,device_id,fileUrl,ip) values('{}','{}','{}','{}','{}','{}')".format(event_id,pre_alarm,content,device_id,fileUrl,ip)
+                try:
+                    cursor.execute(sql_query)
+                    mydb.commit()
+                    print("inser success")
+                except Exception as e:
+                    print("insert failed! sql is:",sql_query)
+                    print(e)
             
-            lock.acquire()
-            frame = frame_buffer.pop()
-            frame_buffer.clear_all()
-            lock.release()
+            pre_c_f = c_f
+            pre_c_p = c_p
+            if(alarmTime is not None):
+                pre_alarm = alarmTime
             
-            #ret,frame = cap.read()
-            #if(ret==False):
-                #print("video is interrupted!")
-                #break
-            h,w,_ = frame.shape
-            i += 1
-            #print("frame id:",i)
-            raw_image    = frame.copy()
-            image        = generator.preprocess_image(raw_image.copy())
-            image, scale = generator.resize_image(image)
+            cut_video_id = 0
+            out_video_path = "/home/sy/keras-retinanet/wurenji/helmet/outVideo/" #之后这里要改
+            video_path = os.path.join(out_video_path,'out_{}.mp4'.format(i))
+            videoWriter = cv2.VideoWriter(video_path, cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'),20,(w,h))  
+            
 
-            c_p = 0
-            c_f = 0
-
-            # run network
-            boxes, scores, labels = model.predict_on_batch(np.expand_dims(image, axis=0))
-
-            # correct boxes for image scale
-            boxes /= scale
-
-            # select indices which have a score above the threshold
-            indices = np.where(scores[0, :] > score_threshold)[0]
-
-            # select those scores
-            scores = scores[0][indices]
-
-            # find the order with which to sort the scores
-            scores_sort = np.argsort(-scores)[:max_detections]
-
-            # select detections
-            image_boxes      = boxes[0, indices[scores_sort], :]
-            image_scores     = scores[scores_sort]
-            image_labels     = labels[0, indices[scores_sort]]
-            image_detections = np.concatenate([image_boxes, np.expand_dims(image_scores, axis=1), np.expand_dims(image_labels, axis=1)], axis=1)
-            #print(image_boxes)
-
-            selection = np.where(image_scores > score_threshold)[0]
-            for s in selection:
-                if(image_labels[s] in (0,1,2,3)):
-                    c_p += 1
-                else:
-                    c_f += 1
-            if(i%100==0 and c_f>0):
-                #截取视频
-                if(videoWriter is not None):
-                    videoWriter.release()
-                alarmTime = datetime.datetime.strftime(datetime.datetime.now(),'%Y-%m-%d %H:%M:%S')
-                if(video_path is not None):
-                    # post the mes
-                    url_post(image_boxes,image_scores,image_labels,(h,w),label_to_name=generator.label_to_name)
-                    
-                    fileUrl = upload(video_path)
-                    #插入数据库
-                    if(pre_alarm is None): 
-                        print("errot")
-                        return 
-                    event_id = str(i)
-                    content = "现场监测到{}个工人，有{}个工人未带安全帽".format(pre_c_p+pre_c_f,pre_c_f)
-                    device_id = "46"
-                    ip = "222.173.73.19:8761"
-                    sql_query = "insert into mtrp_alarm_test(event_id,alarmTime,content,device_id,fileUrl,ip) values('{}','{}','{}','{}','{}','{}')".format(event_id,pre_alarm,content,device_id,fileUrl,ip)
-                    try:
-                        cursor.execute(sql_query)
-                        mydb.commit()
-                        print("inser success")
-                    except Exception as e:
-                        print("insert failed! sql is:",sql_query)
-                        print(e)
-
-                pre_c_f = c_f
-                pre_c_p = c_p
-                if(alarmTime is not None):
-                    pre_alarm = alarmTime
-
-                cut_video_id = 0
-                out_video_path = "/home/sy/keras-retinanet/wurenji/helmet/outVideo/" #之后这里要改
-                video_path = os.path.join(out_video_path,'out_{}.mp4'.format(i))
-                videoWriter = cv2.VideoWriter(video_path, cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'),20,(w,h))  
-
-
-            if save_path is not None:
-                draw_detections(raw_image, image_boxes, image_scores, image_labels, label_to_name=generator.label_to_name)
-                
-                #url_post(image_boxes,image_scores,image_labels,(h,w),label_to_name=generator.label_to_name)
-                
-                if(videoWriter is not None and cut_video_id<100):
-                    videoWriter.write(raw_image)
-                    print("cut_video_id is ",cut_video_id)
-                    cut_video_id += 1
-                #yield raw_image,image_boxes,image_scores,image_labels,(h,w)
-                yield raw_image,c_p,c_f
+        if save_path is not None:
+            draw_detections(raw_image, image_boxes, image_scores, image_labels, label_to_name=generator.label_to_name)
+            if(videoWriter is not None): #and cut_video_id<100):
+                videoWriter.write(raw_image)
+                cut_video_id += 1
+#             cv2.imwrite(os.path.join(save_path, '{}.png'.format(i)), raw_image)
+            yield raw_image,c_p,c_f
     mydb.close()
     return None
 
-def url_post(bboxes,scores,labels,size,label_to_name,score_threshold=0.5):
-    
-    #data = {"bbox":[[x1,x2,y1,y2],[....]],"conf":[....],"class":[.....],"image_size":[(h,w),(...)]}
-    selection = np.where(scores > score_threshold)[0]
-    labels_t = [label_to_name(labels[i]) for i in selection]
-    d = {"image_size":size,"bbox":bboxes[selection,:],"class":labels_t,"conf":scores[selection]}
-    print(bboxes[selection,:])
-    r=requests.post("https://crg.wiseom.cn/helmet",data=d)
-    try:
-        if(r.json()["errmsg"]=="OK"):
-            print("post success!")
-    except Exception as e:
-        print("re:",r.json())
-        print(e)
-    
 
 def _get_detections_split(generator, model, score_threshold=0.05, max_detections=100, save_path=None):
     """ Get the detections from the model using the generator.

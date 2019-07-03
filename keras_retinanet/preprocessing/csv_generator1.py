@@ -157,8 +157,8 @@ class CSVGenerator(Generator):
 
     def image_aspect_ratio(self, image_index):
         # PIL is fast for metadata
-        #image = Image.open(self.image_path(image_index))
-        return 1.2
+        image = Image.open(self.image_path(image_index))
+        return float(image.width) / float(image.height)
 
     def load_image(self, image_index):
         return read_image_bgr(self.image_path(image_index))

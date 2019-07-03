@@ -74,11 +74,17 @@ def draw_detections(image, boxes, scores, labels, color=None, label_to_name=None
     selection = np.where(scores > score_threshold)[0]
 
     for i in selection:
-        c = color if color is not None else label_color(labels[i])
+        #if(label_to_name(labels[i])=="person"):
+        if(labels[i] in (0,1,2,3)):
+            c = (0,255,0)
+        else:
+            c = (0,0,255)
+        
+        #c = color if color is not None else label_color(labels[i])
         draw_box(image, boxes[i, :], color=c)
-
         # draw labels
         caption = (label_to_name(labels[i]) if label_to_name else labels[i]) + ': {0:.2f}'.format(scores[i])
+        #print("caption is ",caption)
         draw_caption(image, boxes[i, :], caption)
 
 

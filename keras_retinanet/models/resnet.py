@@ -22,7 +22,7 @@ import keras_resnet.models
 from . import retinanet
 
 resnet_filename = 'ResNet-{}-model.keras.h5'
-resnet_resource = 'https://github.com/fizyr/keras-models/releases/download/v0.0.1/{}'.format(resnet_filename)
+resnet_resource = 'https://github.com/fizyr/keras-models/releases/{}'.format(resnet_filename)
 
 custom_objects = retinanet.custom_objects.copy()
 custom_objects.update(keras_resnet.custom_objects)
